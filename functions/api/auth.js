@@ -1,3 +1,50 @@
-import {DEFAULT_USERS,readDB,signToken,json} from './_shared.js';
-export async function onRequestPost(context){try{const {username,passwordHash}=await context.request.json();const u=String(username||'').trim().toUpperCase();const db=await readDB(context.env);const disabled=new Set((db.disabledUsers||[]).map(x=>String(x||'').trim().toUpperCase()));const all=[...DEFAULT_USERS,...(db.users||[])].filter(x=>!disabled.has(String(x.username||'').trim().toUpperCase()));const user=all.find(x=>String(x.username||'').trim().toUpperCase()===u);if(!user||user.hash!==passwordHash)return json({error:'Usuário ou senha inválidos.'},401);return json({token:await signToken(context.env,user),username:u,role:user.role,name:user.name||u})}catch(e){return json({error:e?.message?.includes('binding DB')?e.message:'Falha ao autenticar.'},400)}}
-export function onRequest(){return json({error:'Método não permitido.'},405)}
+import {signToken,json} from './_shared.js';
+
+export async function onRequestPost(context){
+  try{
+    const {username,passwordHash}=await context.request.json();
+
+    const u=String(username||'').trim().toUpperCase();
+    const p=String(passwordHash||'').trim();
+
+    if(!u || !p){
+      return json({error:'Informe usuário e senha.'},400);
+    }
+
+    const user=await context.env.DB
+      .prepare(`
+        SELECT id, usuario, nome, nivel, ativo
+        FROM usuarios
+        WHERE UPPER(usuario)=?
+          AND senha=?
+          AND ativo=1
+        LIMIT 1
+      `)
+      .bind(u,p)
+      .first();
+
+    if(!user){
+      return json({error:'Usuário ou senha inválidos.'},401);
+    }
+
+    const tokenUser={
+      username:user.usuario,
+      role:user.nivel === 'vendas' ? 'sales' : user.nivel,
+      name:user.nome || user.usuario
+    };
+
+    return json({
+      token:await signToken(context.env,tokenUser),
+      username:tokenUser.username,
+      role:tokenUser.role,
+      name:tokenUser.name
+    });
+
+  }catch(e){
+    return json({error:'Falha ao autenticar.'},400);
+  }
+}
+
+export function onRequest(){
+  return json({error:'Método não permitido.'},405);
+}
